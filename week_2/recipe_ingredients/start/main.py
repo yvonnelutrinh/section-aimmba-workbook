@@ -9,12 +9,17 @@ import os
 # - unit
 # - name
 
+class Ingredient(BaseModel):
+    name: str = Field(description="Name of the ingredient")
+    amount: float = Field(description="Amount of the ingredient")
+    unit: str = Field(description="Unit of measurement")
+
 class Recipe(BaseModel):
     """
     Use this model when working with complete cooking recipes.
     """
     title: str = Field(description="Name of the recipe")
-    ingredients: List[str] = Field(description="List of ingredients needed for the recipe")
+    ingredients: List[Ingredient] = Field(description="List of ingredients needed for the recipe")
     instructions: List[str] = Field(description="Step-by-step instructions to prepare the recipe")
 
 def get_recipe_from_text(recipe_text: str) -> Recipe:
@@ -48,4 +53,4 @@ if __name__ == "__main__":
     
     # Print results
     pprint(recipe.ingredients[0])
-    # pprint(recipe) # to see the whole object
+    pprint(recipe) # to see the whole object
