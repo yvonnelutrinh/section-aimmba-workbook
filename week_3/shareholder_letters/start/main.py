@@ -1,17 +1,54 @@
 import os
 import glob
 import openai
-from pinecone import Pinecone
+import re
 from typing import List
+from pinecone import Pinecone
 
-# Initialize OpenAI and Pinecone clients
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
+def get_api_key_from_zshrc():
+    """Read the Pinecone API key from .zshrc file."""
+    zshrc_path = os.path.expanduser("~/.zshrc")
+    try:
+        with open(zshrc_path, 'r') as f:
+            for line in f:
+                if 'PINECONE_API_KEY' in line and not line.startswith('#'):
+                    # Extract the API key using regex
+                    match = re.search(r'export\s+PINECONE_API_KEY=["\']?([^\'\n\"]+)["\']?', line)
+                    if match:
+                        return match.group(1)
+    except Exception as e:
+        print(f"Error reading .zshrc: {e}")
+    return None
 
-# Constants
-INDEX_NAME = "YOUR INDEX HERE"
+# Initialize OpenAI client
+client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Pinecone Serverless settings (update these for your project):
+# See your Pinecone console for correct values
+# Pinecone configuration
+INDEX_NAME = "test"
 EMBEDDING_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini-2024-07-18"
+
+# Get API key from .zshrc or environment
+pinecone_api_key = os.environ.get("PINECONE_API_KEY") or get_api_key_from_zshrc()
+if not pinecone_api_key:
+    raise ValueError("Pinecone API key not found. Please set PINECONE_API_KEY in your environment or .zshrc file.")
+
+# Initialize Pinecone client
+pc = Pinecone(api_key=pinecone_api_key)
+
+# Connect to the index
+index = pc.Index(INDEX_NAME, host="test-gyip7p4.svc.aped-4627-b74a.pinecone.io")
+
+# Verify the index connection
+try:
+    stats = index.describe_index_stats()
+    print(f"Successfully connected to index: {INDEX_NAME}")
+    print(f"Index stats: {stats}")
+except Exception as e:
+    print(f"Error connecting to index: {e}")
+    print("Please verify your API key and endpoint URL.")
 
 def load_documents():
     """Load all text documents from the letters directory."""
@@ -49,20 +86,24 @@ def chunk_documents(documents, chunk_size=1000, chunk_overlap=200):
     
     return chunks
 
+def get_embedding(text: str) -> List[float]:
+    """Get embedding for a single piece of text."""
+    response = client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=text,
+        dimensions=512  # Ensure we match the index dimension
+    )
+    return response.data[0].embedding
+
 def get_embeddings(texts: List[str]):
     """Generate embeddings for a list of texts using OpenAI."""
-    response = openai.embeddings.create(
-        input=texts,
-        model=EMBEDDING_MODEL
-    )
-    return [embedding.embedding for embedding in response.data]
+    embeddings = [get_embedding(text) for text in texts]
+    return embeddings
 
 def embed_documents(chunks, namespace):
     """Embed documents and store them in Pinecone."""
-    # Get Pinecone index
-    index = pc.Index(INDEX_NAME)
-    
-    # Prepare batches (Pinecone usually works well with batches of ~100)
+    # Use the global index object (classic API)
+    global index
     batch_size = 100
     for i in range(0, len(chunks), batch_size):
         chunk_batch = chunks[i:i+batch_size]
@@ -98,6 +139,14 @@ def search_documents(query, namespace, top_k=5):
     # 2. Call the query method with the appropriate parameters
     # 3. Process the results to extract the documents
     
+    result=index.query(
+        namespace=namespace,
+        vector=query_embedding, 
+        top_k=top_k,
+        include_metadata=True,
+        include_values=False
+    )
+    
     # Placeholder for the actual implementation
     docs_with_scores = []
     return docs_with_scores
@@ -107,25 +156,19 @@ def ask_openai(query, documents):
     # Join all documents into a single context string
     context = "\n\n".join([doc for doc, _ in documents])
     
-    # Create messages for OpenAI
-    messages = [
-        {"role": "system", "content": "Provide an answer to the user's query about Berkshire Hathaway."
-                              "Documents from the Berkshire Hathaway shareholder meetings will be provided."
-                              "Use those documents to best answer the question."},
-        {"role": "system", "content": f"Documents: {context}"},
-        {"role": "user", "content": query}
-    ]
-    
-    # Call OpenAI API
-    response = openai.chat.completions.create(
+    response = client.chat.completions.create(
         model=CHAT_MODEL,
-        messages=messages
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context."},
+            {"role": "user", "content": f"Context: {context}\n\nQuestion: {query}\nAnswer:"}
+        ],
+        temperature=0.7,
+        max_tokens=500
     )
-    
-    return response.choices[0].message.content
+    return response.choices[0].message.content.strip()
 
 if __name__ == "__main__":
-    # Step 1: Load document embeddings into Pinecone - only run this the first time
+    # # Step 1: Load document embeddings into Pinecone - only run this the first time
     # docs = load_documents()
     # chunks = chunk_documents(docs)
     # embed_documents(chunks, namespace="chunks")
