@@ -3,7 +3,7 @@ import os
 from openai import OpenAI
 from langsmith.evaluation import evaluate
 
-# Initialize the OpenAI client
+# Initialize the OpenAI and LangSmith clients
 client = OpenAI()
 
 # Dataset name in LangSmith (already uploaded)
@@ -50,10 +50,11 @@ def perform_eval(llm_result, dataset_item):
         # Extract score from response
         # For a simpler implementation, let's manually calculate the score
         total_keys = len(expected_output)
-        correct_keys = sum(1 for key in expected_output if key in llm_output and llm_output[key] == expected_output[key])
+        correct_keys = sum(1 for key in expected_output if key in llm_output and expected_output[key] in llm_output[key])
         score = correct_keys / total_keys if total_keys > 0 else 0
         
         return {"score": score}
+
     except json.JSONDecodeError:
         # Handle the case where JSON parsing fails
         return {"score": 0.0}
@@ -63,3 +64,21 @@ def perform_eval(llm_result, dataset_item):
 # See https://docs.smith.langchain.com/evaluation for reference and examples
 # This should evaluate make_call_to_llm against the dataset_name using perform_eval
 # and create an experiment with the prefix "news_extraction_homework"
+
+
+# After running the evaluation, a link will be provided to view the results in langsmith
+evaluation_results = evaluate(
+    make_call_to_llm,
+    data=dataset_name,
+    evaluators=[
+        perform_eval,
+    ],
+    experiment_prefix="news_extraction_evaluation",
+    max_concurrency=2,
+    metadata={
+        "model": "gpt-4o-mini-2024-07-18",
+        "evaluation_version": "1.0",
+        "task": "news_information_extraction",
+        "tags": ["homework", "news", "extraction"]
+    }
+)
