@@ -134,45 +134,123 @@ class TripPlanner:
         
         # Step 2: Flight Selection
         departure_city = input("\nEnter your departure city: ").strip()
+        
+        # Get suggested flight
         suggested_flight = self.suggest_flight(departure_city, destination)
         
-        print("\nSuggested flight:")
+        # Display suggested flight
+        print("\n=== Suggested Flight ===")
         print(f"Airline: {suggested_flight.airline}")
-        print(f"Flight: {suggested_flight.flight_number}")
+        print(f"Flight Number: {suggested_flight.flight_number}")
         print(f"Departure: {suggested_flight.departure_time}")
         print(f"Arrival: {suggested_flight.arrival_time}")
+        
+        # Ask for confirmation
+        if self.get_human_confirmation("Would you like to use this flight?"):
+            flight = suggested_flight
+        else:
+            print("\nPlease enter your flight details:")
+            flight = FlightInfo(
+                flight_number=input("Flight number (e.g., AA123): ").strip(),
+                departure_time=input("Departure time (HH:MM): ").strip(),
+                arrival_time=input("Arrival time (HH:MM): ").strip(),
+                airline=input("Airline: ").strip()
+            )
         
         # Step 3: Itinerary Generation
         suggested_itinerary = self.generate_itinerary(destination)
         
-        print("\nSuggested itinerary:")
-        for index, activities in enumerate(suggested_itinerary.daily_activities, 1):
-            print(f"\nDAY {index + 1}:")
-            for activity in activities:
-                print(f"- {activity}")
-
+        def display_itinerary(itinerary):
+            print("\n=== Your Itinerary ===")
+            for day_num, activities in enumerate(itinerary.daily_activities, 1):
+                print(f"\nDAY {day_num}:")
+                for i, activity in enumerate(activities, 1):
+                    print(f"  {i}. {activity}")
+        
+        while True:
+            display_itinerary(suggested_itinerary)
+            
+            if self.get_human_confirmation("Would you like to keep this itinerary?"):
+                break
+                
+            print("\nWhat would you like to do?")
+            print("1. Add an activity")
+            print("2. Remove an activity")
+            print("3. Edit an activity")
+            print("4. Keep as is")
+            
+            choice = input("\nEnter your choice (1-4): ").strip()
+            
+            if choice == '1':
+                day = int(input("Enter day number: ")) - 1
+                if 0 <= day < len(suggested_itinerary.daily_activities):
+                    activity = input("Enter the activity to add: ").strip()
+                    suggested_itinerary.daily_activities[day].append(activity)
+                    print("Activity added!")
+                else:
+                    print("Invalid day number.")
+                    
+            elif choice == '2':
+                day = int(input("Enter day number: ")) - 1
+                if 0 <= day < len(suggested_itinerary.daily_activities):
+                    activity_num = int(input("Enter activity number to remove: ")) - 1
+                    if 0 <= activity_num < len(suggested_itinerary.daily_activities[day]):
+                        removed = suggested_itinerary.daily_activities[day].pop(activity_num)
+                        print(f"Removed: {removed}")
+                    else:
+                        print("Invalid activity number.")
+                else:
+                    print("Invalid day number.")
+                    
+            elif choice == '3':
+                day = int(input("Enter day number: ")) - 1
+                if 0 <= day < len(suggested_itinerary.daily_activities):
+                    activity_num = int(input("Enter activity number to edit: ")) - 1
+                    if 0 <= activity_num < len(suggested_itinerary.daily_activities[day]):
+                        new_activity = input("Enter new activity: ").strip()
+                        old_activity = suggested_itinerary.daily_activities[day][activity_num]
+                        suggested_itinerary.daily_activities[day][activity_num] = new_activity
+                        print(f"Changed '{old_activity}' to '{new_activity}'")
+                    else:
+                        print("Invalid activity number.")
+                else:
+                    print("Invalid day number.")
+                    
+            elif choice == '4':
+                break
+                
+            else:
+                print("Invalid choice. Please try again.")
+        
         # Save the complete trip plan
         self.trip_plan = TripPlan(
             destination=destination,
             departure_city=departure_city,
-            flight_info=suggested_flight,
+            flight_info=flight,
             itinerary=suggested_itinerary
         )
 
-        # Display final plan
-        print("\n=== Your Trip Plan ===")
-        print(f"Destination: {self.trip_plan.destination}")
+        # Final confirmation
+        print("\n=== Review Your Trip Plan ===")
+        print(f"\nDestination: {self.trip_plan.destination}")
         print(f"Departure from: {self.trip_plan.departure_city}")
         print("\nFlight Information:")
-        print(f"Airline: {suggested_flight.airline}")
-        print(f"Flight: {suggested_flight.flight_number}")
-        print(f"Departure: {suggested_flight.departure_time}")
-        print(f"Arrival: {suggested_flight.arrival_time}")
+        print(f"  Airline: {flight.airline}")
+        print(f"  Flight: {flight.flight_number}")
+        print(f"  Departure: {flight.departure_time}")
+        print(f"  Arrival: {flight.arrival_time}")
+        
         print("\nItinerary:")
-        for index, activities in enumerate(self.trip_plan.itinerary.daily_activities, 1):
-            print(f"\nDAY {index + 1}:")
-            for activity in activities:
-                print(f"- {activity}")
+        for day_num, activities in enumerate(self.trip_plan.itinerary.daily_activities, 1):
+            print(f"\n  DAY {day_num}:")
+            for i, activity in enumerate(activities, 1):
+                print(f"    {i}. {activity}")
+        
+        if self.get_human_confirmation("\nWould you like to confirm and book this trip?"):
+            print("\n✅ Your trip has been booked! Have a great journey! 🚀")
+        else:
+            print("\n❌ Trip planning cancelled. Your trip has not been booked.")
+            return
 
 def main():
     planner = TripPlanner()
