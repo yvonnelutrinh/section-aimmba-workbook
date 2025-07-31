@@ -26,7 +26,7 @@ client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # Pinecone Serverless settings (update these for your project):
 # See your Pinecone console for correct values
 # Pinecone configuration
-INDEX_NAME = "test"
+INDEX_NAME = "letters-test"
 EMBEDDING_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini-2024-07-18"
 
@@ -39,7 +39,7 @@ if not pinecone_api_key:
 pc = Pinecone(api_key=pinecone_api_key)
 
 # Connect to the index
-index = pc.Index(INDEX_NAME, host="test-gyip7p4.svc.aped-4627-b74a.pinecone.io")
+index = pc.Index(INDEX_NAME, host="letters-test-gyip7p4.svc.aped-4627-b74a.pinecone.io")
 
 # Verify the index connection
 try:
@@ -66,24 +66,51 @@ def load_documents():
     return documents
 
 def chunk_documents(documents, chunk_size=1000, chunk_overlap=200):
-    """Split documents into smaller chunks for better processing."""
+    """
+    Split documents into meaningful chunks while preserving context.
+    Tries to split at paragraph boundaries when possible.
+    """
     chunks = []
     
     for doc in documents:
         content = doc["content"]
         metadata = doc["metadata"]
         
-        # Simple text splitting - you can implement more sophisticated chunking if needed
-        for i in range(0, len(content), chunk_size - chunk_overlap):
-            if i > 0:
-                start = i - chunk_overlap
-            else:
-                start = 0
+        # First, split into paragraphs (double newlines)
+        paragraphs = content.split('\n\n')
+        current_chunk = []
+        current_length = 0
+        
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
                 
-            chunk_content = content[start:start + chunk_size]
-            if chunk_content:
-                chunks.append({"content": chunk_content, "metadata": metadata})
+            # If adding this paragraph would exceed chunk size, finalize current chunk
+            if current_chunk and (current_length + len(para) > chunk_size):
+                chunk_text = '\n\n'.join(current_chunk)
+                chunks.append({
+                    "content": chunk_text,
+                    "metadata": metadata
+                })
+                
+                # Start new chunk with overlap from previous chunk
+                overlap_start = max(0, len(current_chunk) - chunk_overlap // 100)
+                current_chunk = current_chunk[overlap_start:]
+                current_length = sum(len(p) for p in current_chunk) + 2 * len(current_chunk)  # +2 for newlines
+            
+            current_chunk.append(para)
+            current_length += len(para) + 2  # +2 for newlines
+        
+        # Add the last chunk if it's not empty
+        if current_chunk:
+            chunk_text = '\n\n'.join(current_chunk)
+            chunks.append({
+                "content": chunk_text,
+                "metadata": metadata
+            })
     
+    print(f"Created {len(chunks)} chunks from {len(documents)} documents")
     return chunks
 
 def get_embedding(text: str) -> List[float]:
@@ -116,30 +143,34 @@ def embed_documents(chunks, namespace):
         
         # Prepare data for Pinecone
         vectors = []
-        for j, embedding in enumerate(embeddings):
+        for j, (chunk, embedding) in enumerate(zip(chunk_batch, embeddings)):
+            # Include both the original metadata and the content in the vector's metadata
+            vector_metadata = chunk["metadata"].copy()
+            vector_metadata["content"] = chunk["content"]  # Store the actual text content
+            
             vectors.append({
                 "id": f"chunk_{i+j}",
                 "values": embedding,
-                "metadata": chunk_batch[j]["metadata"]
+                "metadata": vector_metadata
             })
         
         # Upsert to Pinecone
-        index.upsert(vectors=vectors, namespace=namespace)
+        try:
+            upsert_response = index.upsert(vectors=vectors, namespace=namespace)
+            print(f"Upserted batch {i//batch_size + 1}, response: {upsert_response}")
+        except Exception as e:
+            print(f"Error upserting batch {i//batch_size + 1}: {e}")
+            raise
 
 def search_documents(query, namespace, top_k=5):
     """Search the vector store with the user query."""
+    print(f"\nSearching for: {query}")
+    
     # Get query embedding
     query_embedding = get_embeddings([query])[0]
     
-    # TODO: Search Pinecone using the query_embedding
-    # Implement the search functionality using the Pinecone Index query method
-    # Documentation: https://sdk.pinecone.io/python/pinecone/grpc.html#GRPCIndex.query
-    # The query should:
-    # 1. Get a reference to the index
-    # 2. Call the query method with the appropriate parameters
-    # 3. Process the results to extract the documents
-    
-    result=index.query(
+    # Search Pinecone
+    result = index.query(
         namespace=namespace,
         vector=query_embedding, 
         top_k=top_k,
@@ -147,8 +178,18 @@ def search_documents(query, namespace, top_k=5):
         include_values=False
     )
     
-    # Placeholder for the actual implementation
+    # Process and print results
+    print(f"\nTop {top_k} matches:")
     docs_with_scores = []
+    if hasattr(result, 'matches'):
+        for i, match in enumerate(result.matches, 1):
+            doc_text = match.metadata.get('content', '') if hasattr(match, 'metadata') else ''
+            # Show first 100 chars of each match
+            preview = (doc_text[:100] + '...') if len(doc_text) > 100 else doc_text
+            print(f"\nMatch {i} (Score: {match.score:.3f}):")
+            print(f"Preview: {preview}")
+            docs_with_scores.append((doc_text, match.score))
+    
     return docs_with_scores
 
 def ask_openai(query, documents):
@@ -167,11 +208,40 @@ def ask_openai(query, documents):
     )
     return response.choices[0].message.content.strip()
 
+def clear_index():
+    """Delete all vectors from the index."""
+    global index
+    try:
+        # First get all vector IDs
+        stats = index.describe_index_stats()
+        if stats['namespaces'] and 'chunks' in stats['namespaces']:
+            # Delete all vectors in the 'chunks' namespace
+            index.delete(delete_all=True, namespace="chunks")
+            print("Successfully cleared all vectors from the 'chunks' namespace")
+        else:
+            print("No vectors found to delete")
+    except Exception as e:
+        print(f"Error clearing index: {e}")
+
+def is_index_populated():
+    """Check if the index already has documents."""
+    try:
+        stats = index.describe_index_stats()
+        return stats['namespaces'].get('chunks', {}).get('vector_count', 0) > 0
+    except Exception as e:
+        print(f"Error checking index status: {e}")
+        return False
+
 if __name__ == "__main__":
-    # # Step 1: Load document embeddings into Pinecone - only run this the first time
-    # docs = load_documents()
-    # chunks = chunk_documents(docs)
-    # embed_documents(chunks, namespace="chunks")
+    # Check if index is already populated
+    if not is_index_populated():
+        print("Index is empty. Loading and embedding documents...")
+        docs = load_documents()
+        chunks = chunk_documents(docs)
+        embed_documents(chunks, namespace="chunks")
+        print("Documents embedded successfully!")
+    else:
+        print("Index already contains documents. Using existing index.")
 
     # Step 2: Write a query
     user_query = "When did Berkshire Hathaway purchase it's first coke stock?" # Year: 1988
