@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 import openai
 
 # Configure your OpenAI API key (in a real app, use environment variables)
-# openai.api_key = os.environ.get("OPENAI_API_KEY")
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 class CustomerServiceChainless:
     """
